@@ -60,6 +60,11 @@ def quick_wipe():
     drives_window.geometry("500x400")
     drives_window.configure(bg=current_theme["bg"])
 
+    # ---------- Force window on top ----------
+    drives_window.attributes('-topmost', True)
+    drives_window.update()
+    drives_window.attributes('-topmost', False)
+
     tk.Label(drives_window, text="Select drives to wipe:", font=("Segoe UI", 16),
              bg=current_theme["bg"], fg=current_theme["fg"]).pack(pady=20)
 
