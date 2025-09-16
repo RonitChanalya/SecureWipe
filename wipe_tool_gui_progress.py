@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 import psutil
+import os, shutil
 
 # ---------- Color Helpers ----------
 def hex_to_rgb(h):
@@ -52,6 +53,66 @@ def add_hover_effect(widget, base_color, hover_color):
         widget['bg'] = base_color
     widget.bind("<Enter>", on_enter)
     widget.bind("<Leave>", on_leave)
+
+# ---------- SAFE WIPE FUNCTION ----------
+# def wipe_demo_folder(selected_drive):
+#     """
+#     Wipe only the DemoWipe folder inside the selected drive.
+#     Example: E:\DemoWipe\
+#     """
+#     demo_folder = os.path.join(selected_drive, "DemoWipe")
+
+#     if not os.path.exists(demo_folder):
+#         messagebox.showwarning("Folder Missing",
+#                                f"No 'DemoWipe' folder found on {selected_drive}\n"
+#                                "Please create one and put some files in it.")
+#         return
+
+#     # Ask for confirmation first
+#     confirm = messagebox.askyesno("Confirm Wipe",
+#                                   f"This will delete ALL files inside {demo_folder}\nProceed?")
+#     if not confirm:
+#         return
+
+#     try:
+#         # Delete everything inside DemoWipe folder
+#         for item in os.listdir(demo_folder):
+#             path = os.path.join(demo_folder, item)
+#             if os.path.isfile(path) or os.path.islink(path):
+#                 os.unlink(path)
+#             elif os.path.isdir(path):
+#                 shutil.rmtree(path)
+#         messagebox.showinfo("Wipe Complete",
+#                             f"All files inside {demo_folder} have been deleted.")
+#     except Exception as e:
+#         messagebox.showerror("Error", f"Could not wipe folder: {e}")
+
+def wipe_demo_folder(selected_drive):
+    """
+    Wipe the DemoWipe folder itself inside the selected drive.
+    Example: E:\DemoWipe\
+    """
+    demo_folder = os.path.join(selected_drive, "DemoWipe")
+
+    if not os.path.exists(demo_folder):
+        messagebox.showwarning("Folder Missing",
+                               f"No 'DemoWipe' folder found on {selected_drive}\n"
+                               "Please create one and put some files in it.")
+        return
+
+    # Ask for confirmation first
+    confirm = messagebox.askyesno("Confirm Wipe",
+                                  f"This will DELETE the entire folder:\n{demo_folder}\nProceed?")
+    if not confirm:
+        return
+
+    try:
+        # Delete the folder itself along with all its contents
+        shutil.rmtree(demo_folder)
+        messagebox.showinfo("Wipe Complete",
+                            f"The folder {demo_folder} and all its contents have been deleted.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not wipe folder: {e}")
 
 # ---------- Quick Wipe ----------
 def quick_wipe():
@@ -112,7 +173,9 @@ def quick_wipe():
             messagebox.showwarning("No drive selected", "Please select at least one drive.")
         else:
             drives_window.destroy()
-            messagebox.showinfo("Wipe Complete (Mock)", f"Drives wiped: {', '.join(selected)}")
+            # NEW: safe wipe each drive's DemoWipe folder
+            for drive in selected:
+                wipe_demo_folder(drive)
 
     btn = tk.Button(drives_window, text="Wipe Selected Drives", font=("Segoe UI", 14, "bold"),
                     bg=current_theme["button_quick"], fg="white",
@@ -182,7 +245,7 @@ heading = tk.Label(root, text="Drive Wipe Utility", font=("Segoe UI", 40, "bold"
                    bg=current_theme["bg"], fg=current_theme["fg"])
 heading.pack(pady=40)
 
-subheading = tk.Label(root, text="Choose your wipe option below.\nQuick Wipe removes selected drives.\nFull Wipe nukes the entire system.",
+subheading = tk.Label(root, text="Choose your wipe option below.\nQuick Wipe removes DemoWipe folder from selected drives.\nFull Wipe nukes the entire system (mock).",
                       font=("Segoe UI", 18), bg=current_theme["bg"],
                       fg=current_theme["subtext"], justify="center")
 subheading.pack(pady=10)
