@@ -1,7 +1,9 @@
+# wipe_tool_gui_progress.py
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 import psutil
-import os, shutil
+import os, shutil, time
+import certificate_generator   # import the fixed module
 
 # ---------- Color Helpers ----------
 def hex_to_rgb(h):
@@ -54,44 +56,8 @@ def add_hover_effect(widget, base_color, hover_color):
     widget.bind("<Enter>", on_enter)
     widget.bind("<Leave>", on_leave)
 
-# ---------- SAFE WIPE FUNCTION ----------
-# def wipe_demo_folder(selected_drive):
-#     """
-#     Wipe only the DemoWipe folder inside the selected drive.
-#     Example: E:\DemoWipe\
-#     """
-#     demo_folder = os.path.join(selected_drive, "DemoWipe")
-
-#     if not os.path.exists(demo_folder):
-#         messagebox.showwarning("Folder Missing",
-#                                f"No 'DemoWipe' folder found on {selected_drive}\n"
-#                                "Please create one and put some files in it.")
-#         return
-
-#     # Ask for confirmation first
-#     confirm = messagebox.askyesno("Confirm Wipe",
-#                                   f"This will delete ALL files inside {demo_folder}\nProceed?")
-#     if not confirm:
-#         return
-
-#     try:
-#         # Delete everything inside DemoWipe folder
-#         for item in os.listdir(demo_folder):
-#             path = os.path.join(demo_folder, item)
-#             if os.path.isfile(path) or os.path.islink(path):
-#                 os.unlink(path)
-#             elif os.path.isdir(path):
-#                 shutil.rmtree(path)
-#         messagebox.showinfo("Wipe Complete",
-#                             f"All files inside {demo_folder} have been deleted.")
-#     except Exception as e:
-#         messagebox.showerror("Error", f"Could not wipe folder: {e}")
-
+# ---------- SAFE WIPE FUNCTION with Progress ----------
 def wipe_demo_folder(selected_drive):
-    """
-    Wipe the DemoWipe folder itself inside the selected drive.
-    Example: E:\DemoWipe\
-    """
     demo_folder = os.path.join(selected_drive, "DemoWipe")
 
     if not os.path.exists(demo_folder):
@@ -100,25 +66,74 @@ def wipe_demo_folder(selected_drive):
                                "Please create one and put some files in it.")
         return
 
-    # Ask for confirmation first
     confirm = messagebox.askyesno("Confirm Wipe",
                                   f"This will DELETE the entire folder:\n{demo_folder}\nProceed?")
     if not confirm:
         return
 
+    # Gather all files to delete first
+    files_to_delete = []
+    for root_dir, dirs, files in os.walk(demo_folder):
+        for f in files:
+            files_to_delete.append(os.path.join(root_dir, f))
+    total_items = len(files_to_delete)
+
+    # Progress window
+    progress_win = tk.Toplevel(root)
+    progress_win.title("Wiping...")
+    progress_win.geometry("420x120")
+    progress_win.configure(bg=current_theme["bg"])
+    tk.Label(progress_win, text=f"Wiping {selected_drive} DemoWipe...",
+             bg=current_theme["bg"], fg=current_theme["fg"],
+             font=("Segoe UI", 14)).pack(pady=8)
+    progress_bar = tk.Frame(progress_win, bg=current_theme["progress_bg"], height=20)
+    progress_bar.pack(fill="x", padx=20, pady=8)
+    bar_fill = tk.Frame(progress_bar, bg=current_theme["progress_fill"], height=20, width=0)
+    bar_fill.pack(side="left", fill="y")
+
+    def update_progress(done):
+        percent = (done / total_items) * 100 if total_items > 0 else 100
+        width = int((percent/100) * 360)
+        bar_fill.config(width=width)
+        progress_win.update_idletasks()
+
+    deleted_files = []
     try:
-        # Delete the folder itself along with all its contents
-        shutil.rmtree(demo_folder)
+        done = 0
+        for f in files_to_delete:
+            try:
+                os.remove(f)
+                deleted_files.append(f)
+            except Exception:
+                # if delete fails, continue; will be reported in certificate if needed
+                pass
+            done += 1
+            update_progress(done)
+
+        # Remove remaining empty directories including DemoWipe
+        shutil.rmtree(demo_folder, ignore_errors=True)
+        progress_win.destroy()
         messagebox.showinfo("Wipe Complete",
                             f"The folder {demo_folder} and all its contents have been deleted.")
+
+        # Generate certificate after wipe
+        try:
+            # Pass selected_drive and deleted_files to certificate generator
+            pdf_path, json_path = certificate_generator.generate_certificate(selected_drive, deleted_files)
+            messagebox.showinfo("Certificate Generated",
+                                f"Certificate saved:\n{pdf_path}\n{json_path}")
+        except Exception as e:
+            messagebox.showerror("Certificate Error", f"Could not generate certificate:\n{e}")
+
     except Exception as e:
+        progress_win.destroy()
         messagebox.showerror("Error", f"Could not wipe folder: {e}")
 
 # ---------- Quick Wipe ----------
 def quick_wipe():
     drives_window = tk.Toplevel(root)
     drives_window.title("Quick Wipe - Select Drives")
-    drives_window.geometry("500x400")
+    drives_window.geometry("520x420")
     drives_window.configure(bg=current_theme["bg"])
 
     # ---------- Force window on top ----------
@@ -127,7 +142,7 @@ def quick_wipe():
     drives_window.attributes('-topmost', False)
 
     tk.Label(drives_window, text="Select drives to wipe:", font=("Segoe UI", 16),
-             bg=current_theme["bg"], fg=current_theme["fg"]).pack(pady=20)
+             bg=current_theme["bg"], fg=current_theme["fg"]).pack(pady=12)
 
     # Detect drives
     partitions = psutil.disk_partitions(all=False)
@@ -148,7 +163,7 @@ def quick_wipe():
     for d, used, total, percent in drives_info:
         var = tk.BooleanVar()
         frame_drive = tk.Frame(drives_window, bg=current_theme["bg"])
-        frame_drive.pack(fill="x", padx=30, pady=5)
+        frame_drive.pack(fill="x", padx=30, pady=6)
 
         cb = tk.Checkbutton(frame_drive,
                             text=f"{d}  {used}GB used / {total}GB total",
@@ -160,7 +175,7 @@ def quick_wipe():
 
         # Add bar
         bar_frame = tk.Frame(frame_drive, bg=current_theme["progress_bg"], height=10)
-        bar_frame.pack(fill="x", padx=40, pady=2)
+        bar_frame.pack(fill="x", padx=40, pady=3)
         bar_fill = tk.Frame(bar_frame, bg=current_theme["progress_fill"], height=10,
                             width=int(percent * 3))  # scale for width
         bar_fill.pack(side="left", fill="y")
@@ -173,16 +188,15 @@ def quick_wipe():
             messagebox.showwarning("No drive selected", "Please select at least one drive.")
         else:
             drives_window.destroy()
-            # NEW: safe wipe each drive's DemoWipe folder
             for drive in selected:
                 wipe_demo_folder(drive)
 
     btn = tk.Button(drives_window, text="Wipe Selected Drives", font=("Segoe UI", 14, "bold"),
                     bg=current_theme["button_quick"], fg="white",
-                    activebackground=current_theme["button_quick_hover"], width=20,
+                    activebackground=current_theme["button_quick_hover"], width=22,
                     height=2, relief="flat", command=run_wipe,
                     bd=0, highlightthickness=0)
-    btn.pack(pady=20)
+    btn.pack(pady=14)
     add_hover_effect(btn, current_theme["button_quick"], current_theme["button_quick_hover"])
 
 # ---------- Full Wipe ----------
