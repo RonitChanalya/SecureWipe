@@ -226,3 +226,4 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
 if __name__ == "__main__":
     pdf, jsn = generate_certificate(selected_drive=".", deleted_files=["/tmp/a.txt", "/tmp/b.txt"])
     print("Generated:", pdf, jsn)
+    print()
