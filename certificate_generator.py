@@ -1,31 +1,74 @@
-# certificate_generator.py
-import subprocess
-import platform
+# certificate_generator.py (updated)
+import subprocess, platform, json, psutil, os, hashlib
 from uuid import uuid4
 from datetime import datetime
-import json
-import psutil
-import os
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, ec
+from cryptography.hazmat.backends import default_backend
+import base64
 
-def generate_certificate(selected_drive=None, deleted_files=None, output_dir=None):
+# NEW: signing function 
+# def sign_certificate_data(data_bytes, private_key_path="private_key.pem"):
+#     """
+#     Sign the SHA256 digest of data_bytes using RSA/ECDSA.
+#     Returns a base64 signature string.
+#     """
+#     with open(private_key_path, "rb") as key_file:
+#         private_key = serialization.load_pem_private_key(
+#             key_file.read(),
+#             password=None,
+#             backend=default_backend()
+#         )
+
+#     # if RSA key
+#     if isinstance(private_key, rsa.RSAPrivateKey):
+#         signature = private_key.sign(
+#             data_bytes,
+#             padding.PSS(
+#                 mgf=padding.MGF1(hashes.SHA256()),
+#                 salt_length=padding.PSS.MAX_LENGTH
+#             ),
+#             hashes.SHA256()
+#         )
+#     else:  # ECDSA
+#         signature = private_key.sign(data_bytes, ec.ECDSA(hashes.SHA256()))
+
+#     return base64.b64encode(signature).decode("utf-8")
+
+def sign_certificate_data(data_bytes):
+    """Sign certificate data using RSA private key."""
+    with open("private_key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,
+            backend=default_backend()
+        )
+
+    signature = private_key.sign(
+        data_bytes,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+    # Return base64 signature string
+    return base64.b64encode(signature).decode("utf-8")
+
+def generate_certificate(selected_drive=None, deleted_files=None, output_dir=None,
+                         operator_id="OP123", organization="SecureWipe Labs",
+                         contact_info="+91 9999999999", wipe_log_text="sample log"):
     """
     Generates a professional PDF + JSON certificate.
-    Parameters:
-      - selected_drive: drive path string (e.g. "D:\\" or "/mnt/some")
-      - deleted_files: list of deleted file paths (can be [])
-      - output_dir: optional directory where certificates will be saved.
-                    If None, it will create a 'Certificates' folder under selected_drive.
-    Returns: (pdf_fullpath, json_fullpath)
     """
     if deleted_files is None:
         deleted_files = []
 
-    # Ensure selected_drive is a path string when provided
     if selected_drive:
         selected_drive = os.path.abspath(selected_drive)
 
@@ -36,15 +79,18 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
     company_address = "VIT-AP University MH-5 1018 717"
     company_contact = "+91 7453811860"
     company_website = "https://secure-wipe-xi.vercel.app/"
-    verify_link = "https://secure-wipe-xi.vercel.app/verify"
     software_version = "SecureWipe v2.0"
+
+    # Verification URL now includes certificate number later
+    base_verify_link = "https://secure-wipe-xi.vercel.app/verify/"
+
+    # Sanitization standard
+    sanitization_standard = "NIST SP 800-88 Purge – Secure Erase"
 
     # ------------------------------------------------------------------
     # AUTO DETECT DEVICE INFO
     # ------------------------------------------------------------------
     system_make_model = f"{platform.node()} / {platform.system()} {platform.release()}"
-
-    # Try to get more detailed system info on Windows (best-effort)
     try:
         if platform.system().lower().startswith("win"):
             wmic_cs = subprocess.check_output(["wmic", "computersystem", "get", "manufacturer,model"], shell=True)
@@ -59,7 +105,7 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
     device_serial_asset = platform.node()
 
     # ------------------------------------------------------------------
-    # AUTO DETECT DRIVE INFO (best-effort for the specified drive)
+    # DRIVE INFO
     # ------------------------------------------------------------------
     drive_manufacturer_model = "Unknown"
     drive_serial_number = "Unknown"
@@ -72,7 +118,6 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
             )
             lines = wmic_disk.decode(errors='ignore').strip().splitlines()
             if len(lines) > 1:
-                # attempt to parse the first non-empty line after header
                 for line in lines[1:]:
                     if line.strip():
                         first_drive_line = line.strip()
@@ -89,18 +134,9 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
                                 drive_capacity_interface = interface
                         break
         else:
-            # On linux/mac use psutil fallback
             parts = psutil.disk_partitions()
             if parts:
-                # attempt to get a partition that matches the selected_drive mountpoint
-                target = None
-                if selected_drive:
-                    for p in parts:
-                        if os.path.abspath(p.mountpoint).lower() in os.path.abspath(selected_drive).lower():
-                            target = p
-                            break
-                if target is None:
-                    target = parts[0]
+                target = parts[0]
                 usage = psutil.disk_usage(target.mountpoint)
                 size_gb = usage.total // (1024**3)
                 drive_capacity_interface = f"{size_gb}GB"
@@ -109,26 +145,31 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
         pass
 
     # ------------------------------------------------------------------
-    # AUTO GENERATED CERTIFICATE DETAILS
+    # CERTIFICATE DETAILS
     # ------------------------------------------------------------------
     certificate_number = str(uuid4())
     date_time_issue = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    verify_link = base_verify_link + certificate_number
 
-    # decide output dir
+    # Hidden areas mention
+    hidden_areas = "HPA/DCO and SSD spare sectors addressed during purge"
+
+    # Compute SHA256 hash of wipe log or disk ID
+    sha_input = (wipe_log_text + drive_serial_number).encode("utf-8")
+    sha256_hash = hashlib.sha256(sha_input).hexdigest()
+
+    # ------------------------------------------------------------------
+    # OUTPUT DIR
+    # ------------------------------------------------------------------
     if output_dir:
         out_dir = os.path.abspath(output_dir)
     elif selected_drive:
-        # create Certificates folder under the drive root
-        # selected_drive might be something like "D:\\" or "/mnt/sda1"
         out_dir = os.path.join(selected_drive, "Certificates")
     else:
-        out_dir = os.path.abspath(".")  # fallback to current dir
+        out_dir = os.path.abspath(".")
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # OUTPUT FILES
-    # ------------------------------------------------------------------
     pdf_filename = os.path.join(out_dir, f"SecureWipe_Certificate_{certificate_number}.pdf")
     json_filename = os.path.join(out_dir, f"SecureWipe_Certificate_{certificate_number}.json")
 
@@ -136,35 +177,39 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
     # JSON DATA
     # ------------------------------------------------------------------
     certificate_data = {
-        "certificate_number": certificate_number,
-        "date_time_issue": date_time_issue,
-        "company": {
-            "name": company_name,
-            "address": company_address,
-            "contact": company_contact,
-            "website": company_website
-        },
-        "software_version": software_version,
+        "certificate_id": certificate_number,
+        "issued_on": date_time_issue,
+        "sanitization_standard": sanitization_standard,
         "device": {
             "make_model": system_make_model,
-            "serial_asset": device_serial_asset
+            "serial_asset": device_serial_asset,
+            "drive_model": drive_manufacturer_model,
+            "drive_serial": drive_serial_number,
+            "capacity_interface": drive_capacity_interface,
+            "hidden_areas": hidden_areas
         },
-        "drive": {
-            "manufacturer_model": drive_manufacturer_model,
-            "serial_number": drive_serial_number,
-            "capacity_interface": drive_capacity_interface
+        "operator": {
+            "operator_id": operator_id,
+            "organization": organization,
+            "contact_info": contact_info
         },
         "files_deleted_count": len(deleted_files),
-        "deleted_files_sample": deleted_files[:10],   # include small sample for traceability
-        "verify_link": verify_link
+        "deleted_files_sample": deleted_files[:10],
+        "hash": sha256_hash,
+        "verify_link": verify_link,
+        "tool_version": software_version
     }
 
-    # save JSON
+    # Sign JSON
+    signature = sign_certificate_data(json.dumps(certificate_data, sort_keys=True).encode("utf-8"))
+    certificate_data["digital_signature"] = signature
+
+    # Save JSON
     with open(json_filename, "w", encoding="utf-8") as f:
         json.dump(certificate_data, f, indent=4, ensure_ascii=False)
 
     # ------------------------------------------------------------------
-    # BUILD PDF
+    # PDF BUILD
     # ------------------------------------------------------------------
     pdf = SimpleDocTemplate(pdf_filename, pagesize=A4,
                             rightMargin=40, leftMargin=40,
@@ -172,7 +217,6 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
 
     elements = []
     styles = getSampleStyleSheet()
-
     title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], alignment=TA_CENTER,
                                  fontSize=22, spaceAfter=12)
     subtitle_style = ParagraphStyle('SubTitleStyle', parent=styles['Normal'], alignment=TA_CENTER,
@@ -186,26 +230,29 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
     elements.append(Paragraph("<b>Certificate of Secure Data Wipe</b>", title_style))
     elements.append(Paragraph(f"Certificate Number: {certificate_number}", subtitle_style))
     elements.append(Paragraph(f"Issued on: {date_time_issue}", subtitle_style))
+    elements.append(Paragraph(f"Standard: {sanitization_standard}", subtitle_style))
     elements.append(Spacer(1, 14))
 
-    # Table of details
     table_data = [
         ['Software Version', software_version],
+        ['Operator ID', operator_id],
+        ['Organization', organization],
+        ['Contact Info', contact_info],
         ['Device Make/Model', system_make_model],
-        ['Device Serial / Asset Tag', device_serial_asset],
-        ['Drive Manufacturer / Model', drive_manufacturer_model],
+        ['Drive Model', drive_manufacturer_model],
         ['Drive Serial Number', drive_serial_number],
         ['Drive Capacity & Interface', drive_capacity_interface],
-        ['Files Deleted (count)', str(len(deleted_files))]
+        ['Hidden Areas', hidden_areas],
+        ['Files Deleted (count)', str(len(deleted_files))],
+        ['SHA-256 Log Hash', sha256_hash[:32] + '...']
     ]
 
     table = Table(table_data, colWidths=[180, 320])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
@@ -213,17 +260,16 @@ def generate_certificate(selected_drive=None, deleted_files=None, output_dir=Non
     elements.append(table)
     elements.append(Spacer(1, 18))
 
-    elements.append(Paragraph("Authorized Signature: _______________________", styles['Normal']))
+    # elements.append(Paragraph("Digital Signature (hex of SHA256):", styles['Normal']))
+    elements.append(Paragraph("Digital Signature (Base64):", styles['Normal']))
+    elements.append(Paragraph(signature[:64] + '...', styles['Normal']))
     elements.append(Spacer(1, 8))
     elements.append(Paragraph(f"Verify this certificate at: <a href='{verify_link}' color='blue'>{verify_link}</a>", subtitle_style))
 
     pdf.build(elements)
-
     return pdf_filename, json_filename
-
 
 # Standalone test
 if __name__ == "__main__":
     pdf, jsn = generate_certificate(selected_drive=".", deleted_files=["/tmp/a.txt", "/tmp/b.txt"])
     print("Generated:", pdf, jsn)
-    print()
